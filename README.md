@@ -100,10 +100,28 @@ python run_zero123.py \
     --depth_smooth_weight 10000. \
     --near_view_weight 10000. \
     --train_view True \
-    --prefix "experiments/exp_wild" \
+    --prefix "experiments/scott_exp_wild" \
     --vox.blend_bg_texture False \
     --nerf_path "data/nerf_wild"
 ```
+
+```
+nohup python run_zero123.py \
+    --scene taxi \
+    --index 0 \
+    --n_steps 1000 \
+    --lr 0.05 \
+    --sd.scale 100.0 \
+    --emptiness_weight 1 \
+    --depth_smooth_weight 10000. \
+    --near_view_weight 10000. \
+    --train_view True \
+    --prefix "experiments/exp_wild" \
+    --vox.blend_bg_texture False \
+    --nerf_path "data/nerf_wild" \
+    --modified True
+```
+
 - You can see results under: `3drec/experiments/exp_wild/$EXP_NAME`.  
 
 

@@ -8,6 +8,7 @@ from pydantic import validator
 import kornia
 import cv2
 import math
+import pdb
 
 from torchvision import transforms
 
@@ -30,13 +31,35 @@ from voxnerf.render import (
 )
 from voxnerf.vis import stitch_vis, bad_vis as nerf_vis, vis_img
 from voxnerf.data import load_blender
-from my3d import get_T, depth_smooth_loss
+from my3d import get_T, depth_smooth_loss, modified_depth_smooth_loss
 
 # # diet nerf
 # import sys
 # sys.path.append('./DietNeRF/dietnerf')
 # from DietNeRF.dietnerf.run_nerf import get_embed_fn
 # import torch.nn.functional as F
+
+from torchvision.models import vgg16
+import torch.nn.functional as F
+
+class VGG16PerceptualLoss(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.vgg16 = vgg16(pretrained=True).features[:23].eval()
+        for param in self.vgg16.parameters():
+            param.requires_grad = False
+        self.mean = torch.tensor([0.485, 0.456, 0.406]).view(1,3,1,1)
+        self.std = torch.tensor([0.229, 0.224, 0.225]).view(1,3,1,1)
+
+    def forward(self, input, target):
+        input = input.float()  # Convert input to float
+        target = target.float()  # Convert target to float
+
+        input = (input - self.mean.to(input.device)) / self.std.to(input.device)
+        target = (target - self.mean.to(target.device)) / self.std.to(target.device)
+        input_features = self.vgg16(input)
+        target_features = self.vgg16(target)
+        return F.l1_loss(input_features, target_features)
 
 device_glb = torch.device("cuda")
 
@@ -101,6 +124,7 @@ class SJC(BaseConf):
     view_weight:        int = 10000
     prefix:             str = 'exp'
     nerf_path:          str = "data/nerf_wild"
+    modified:           bool = False
 
     @validator("vox")
     def check_vox(cls, vox_cfg, values):
@@ -126,7 +150,7 @@ class SJC(BaseConf):
 def sjc_3d(poser, vox, model: ScoreAdapter,
     lr, n_steps, emptiness_scale, emptiness_weight, emptiness_step, emptiness_multiplier,
     depth_weight, var_red, train_view, scene, index, view_weight, prefix, nerf_path, \
-    depth_smooth_weight, near_view_weight, grad_accum, **kwargs):
+    depth_smooth_weight, near_view_weight, grad_accum, modified, **kwargs):
 
     assert model.samps_centered()
     _, target_H, target_W = model.data_shape()
@@ -145,7 +169,11 @@ def sjc_3d(poser, vox, model: ScoreAdapter,
 
     folder_name = prefix + '/scene-%s-index-%d_scale-%s_train-view-%s_view-weight-%s_depth-smooth-wt-%s_near-view-wt-%s' % \
                             (scene, index, model.scale, train_view, view_weight, depth_smooth_weight, near_view_weight)
-
+    if modified:
+        folder_name = folder_name + "_MODIFIED"
+    
+    perceptual_loss_fn = VGG16PerceptualLoss().to(device_glb)
+    
     # load nerf view
     images_, _, poses_, mask_, fov_x = load_blender('train', scene=scene, path=nerf_path)
     # K_ = poser.get_K(H, W, fov_x * 180. / math.pi)
@@ -197,7 +225,11 @@ def sjc_3d(poser, vox, model: ScoreAdapter,
                 with torch.enable_grad():
                     y_, depth_, ws_ = render_one_view(vox, aabb, H, W, input_K, input_pose, return_w=True)
                     y_ = model.decode(y_)
-                rgb_loss = ((y_ - input_image) ** 2).mean()
+
+                if modified:
+                    rgb_loss = perceptual_loss_fn(y_, input_image)
+                else:
+                    rgb_loss = ((y_ - input_image) ** 2).mean()
 
                 # depth smoothness loss
                 input_smooth_loss = depth_smooth_loss(depth_) * depth_smooth_weight * 0.1
@@ -302,6 +334,9 @@ def sjc_3d(poser, vox, model: ScoreAdapter,
 
 @torch.no_grad()
 def evaluate(score_model, vox, poser):
+    # ckpt_path = "experiments/exp_wild/scene-pikachu-index-0_scale-100.0_train-view-True_view-weight-10000_depth-smooth-wt-10000.0_near-view-wt-10000.0/ckpt/step_10000.pt"
+    # vox.load_state_dict(torch.load(ckpt_path))
+    # vox.export_mesh("output/pikachu.ply")
     H, W = poser.H, poser.W
     vox.eval()
     K, poses = poser.sample_test(100)
@@ -330,6 +365,7 @@ def evaluate(score_model, vox, poser):
 
     metric.flush_history()
 
+    print("Generating the mp4 video!")
     metric.put_artifact(
         "view_seq", ".mp4",
         lambda fn: stitch_vis(fn, read_stats(metric.output_dir, "view")[1])
@@ -373,6 +409,7 @@ def vis_routine(metric, y, depth):
 
 
 def evaluate_ckpt():
+    print("start evaluate ckpt")
     cfg = optional_load_config(fname="full_config_objaverse.yml")
     assert len(cfg) > 0, "can't find cfg file"
     mod = SJC(**cfg)
@@ -403,4 +440,5 @@ def latest_ckpt():
 if __name__ == "__main__":
     seed_everything(0)
     dispatch(SJC)
+    
     # evaluate_ckpt()

@@ -18,6 +18,26 @@ def depth_smooth_loss(depth):
     grad_x, grad_y = gradient_x(depth), gradient_y(depth)
     return (grad_x.abs().mean() + grad_y.abs().mean()) / 2.
 
+def modified_depth_smooth_loss(depth):
+    depth_dx = gradient_x(depth)
+    depth_dy = gradient_y(depth)
+    
+    depth_smooth_weight = 0.25
+    edge_aware_smoothness_weight = 0.25
+
+    # Calculate edge-aware smoothness term
+    edge_aware_smoothness = torch.exp(-(depth_dx.abs().mean() + depth_dy.abs().mean()))
+
+    # Combine smoothness term and edge-aware smoothness term
+    smooth_loss = (depth_dx.abs().mean() + depth_dy.abs().mean()) * depth_smooth_weight
+    
+    total_loss = smooth_loss + edge_aware_smoothness.mean() * edge_aware_smoothness_weight
+    
+    return total_loss
+
+def modified_rgb_loss(y_, input_image):
+    pass
+
 def cartesian_to_spherical(xyz):
     ptsnew = np.hstack((xyz, np.zeros(xyz.shape)))
     xy = xyz[:,0]**2 + xyz[:,1]**2
